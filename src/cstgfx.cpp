@@ -8,7 +8,6 @@
 #include <map>
 #include <string>
 
-
 #include <D3Dcompiler.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -95,17 +94,50 @@ update_window()
 	return is_active;
 }
 
+D3D12_SHADER_BYTECODE
+create_shader_from_file(
+	std::string fstr, std::string entry, std::string profile,
+	std::vector<uint8_t> &shader_code)
+{
+	ID3DBlob *blob = nullptr;
+	ID3DBlob *blob_err = nullptr;
+	ID3DBlob *blob_sig = nullptr;
+
+	std::vector<WCHAR> wfname;
+	UINT flags = 0;
+	for (int i = 0; i < fstr.length(); i++)
+		wfname.push_back(fstr[i]);
+	wfname.push_back(0);
+	D3DCompileFromFile(&wfname[0], NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+		entry.c_str(), profile.c_str(), flags, 0, &blob, &blob_err);
+	if (blob_err) {
+		printf("%s:\n%s\n", __FUNCTION__, (char *) blob_err->GetBufferPointer());
+		blob_err->Release();
+	}
+	if (!blob && !blob_err)
+		printf("File Not found : %s\n", fstr.c_str());
+	if (!blob)
+		return {nullptr, 0};
+	shader_code.resize(blob->GetBufferSize());
+	memcpy(shader_code.data(), blob->GetBufferPointer(), blob->GetBufferSize());
+	if (blob)
+		blob->Release();
+	return { shader_code.data(), shader_code.size() };
+}
+
+
 struct dx12heap {
 	ID3D12DescriptorHeap *heap = NULL;
 	uint64_t index = 0;
 	std::map<void *, D3D12_CPU_DESCRIPTOR_HANDLE> mhcpu;
 	std::map<void *, D3D12_GPU_DESCRIPTOR_HANDLE> mhgpu;
 
-	void init(ID3D12Device *dev, D3D12_DESCRIPTOR_HEAP_TYPE type, int num = 256)
+	void init(ID3D12Device *dev, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT num = 256)
 	{
-		dev->CreateDescriptorHeap(
-			&D3D12_DESCRIPTOR_HEAP_DESC({type, num, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0}),
-			IID_PPV_ARGS(&heap));
+		auto flag = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+		if(type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+			flag = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({type, num, flag, 0}), IID_PPV_ARGS(&heap));
 	}
 
 	void alloc(ID3D12Device *dev, void *res)
@@ -132,30 +164,30 @@ struct dx12heap {
 	D3D12_GPU_DESCRIPTOR_HANDLE
 	get_hgpu(ID3D12Device *dev, void *res)
 	{
-		if(mhcpu.count(res) == 0)
+		if(mhgpu.count(res) == 0)
 			alloc(dev, res);
 		return mhgpu[res];
 	}
 };
 
 struct dx12device {
-	ID3D12Device *device = NULL;
+	ID3D12Device *dev = NULL;
 	ID3D12CommandQueue *queue = NULL;
 	IDXGISwapChain3 *swap_chain = NULL;
 
-	UINT GetWidth() {
+	UINT get_width() {
 		DXGI_SWAP_CHAIN_DESC desc = {};
 		swap_chain->GetDesc(&desc);
 		return desc.BufferDesc.Width;
 	}
 
-	UINT GetHeight() {
+	UINT get_height() {
 		DXGI_SWAP_CHAIN_DESC desc = {};
 		swap_chain->GetDesc(&desc);
 		return desc.BufferDesc.Height;
 	}
 
-	UINT GetBufferCount() {
+	UINT get_buffer_count() {
 		DXGI_SWAP_CHAIN_DESC desc = {};
 		swap_chain->GetDesc(&desc);
 		return desc.BufferCount;
@@ -165,10 +197,11 @@ struct dx12device {
 	init(HWND hwnd, UINT Width, UINT Height, UINT BufferCount)
 	{
 		D3D12_COMMAND_QUEUE_DESC desc = {};
-		D3D12CreateDevice(NULL, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device));
+		D3D12CreateDevice(NULL, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&dev));
+		printf("dev=%p\n", dev);
 		dev->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue));
+		printf("queue=%p\n", queue);
 		{
-			IDXGISwapChain3 *ret = NULL;
 			IDXGIFactory4 *factory = NULL;
 			IDXGISwapChain *temp = NULL;
 			DXGI_SWAP_CHAIN_DESC desc = {
@@ -186,58 +219,32 @@ struct dx12device {
 			CreateDXGIFactory1(IID_PPV_ARGS(&factory));
 			factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 			factory->CreateSwapChain(queue, &desc, &temp);
-			temp->QueryInterface(IID_PPV_ARGS(&ret));
+			temp->QueryInterface(IID_PPV_ARGS(&swap_chain));
 			temp->Release();
 			factory->Release();
 		}
 	}
 };
 
-struct dx12frame {
+struct dx12context {
 	ID3D12CommandAllocator *cmdalloc = NULL;
 	ID3D12GraphicsCommandList *cmdlist = NULL;
-	ID3D12DescriptorHeap *rtv_heap = NULL;
-	ID3D12DescriptorHeap *cbv_heap = NULL;
-	ID3D12DescriptorHeap *srv_heap = NULL;
-	ID3D12DescriptorHeap *uav_heap = NULL;
+	ID3D12Resource *back_buffer = NULL;
 	ID3D12Fence *fence = NULL;
 	uint64_t fence_value = -1;
-
-	ID3D12Resource *back_buffer = NULL;
-	
 	void init(ID3D12Device *dev, IDXGISwapChain3 *swap_chain, UINT buffer_index) {
-		uav_cbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-		uav_dbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 		fence_value = -1;
 		dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdalloc));
 		dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdalloc, NULL, IID_PPV_ARGS(&cmdlist));
 		dev->CreateFence(fence_value, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-		swap_chain->GetBuffer(i, IID_PPV_ARGS(&back_buffer));
-		/*
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0}), IID_PPV_ARGS(&f.rtv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.cbv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.srv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.uav_heap));
-		create_rtv(dev, f.rtv_cbuffer, get_cpu_handle(dev, f.rtv_heap, i));
-		create_uav(dev, f.uav_cbuffer, 0, 0, get_cpu_handle(dev, f.uav_heap, i));
-		*/
-		//create_uav(dev, f.uav_dbuffer, 0, 0, get_cpu_handle(dev, f.uav_heap, i));
+		swap_chain->GetBuffer(buffer_index, IID_PPV_ARGS(&back_buffer));
 	}
 	
 };
 
-struct dx12cpstate {
-	ID3D12RootSignature *rootsig = NULL;
-	ID3D12PipelineState *cpstate = NULL;
-	void init(const char *filename) {
-	}
-};
-
 D3D12_RESOURCE_BARRIER
-get_res_barrier(
-	ID3D12Resource *res,
-	D3D12_RESOURCE_STATES before,
-	D3D12_RESOURCE_STATES after,
+get_res_barrier(ID3D12Resource *res,
+	D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after,
 	D3D12_RESOURCE_BARRIER_TYPE type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
 {
 	D3D12_RESOURCE_BARRIER ret = {};
@@ -252,7 +259,7 @@ get_res_barrier(
 
 ID3D12Resource *
 create_res(ID3D12Device *dev, int w, int h, DXGI_FORMAT fmt,
-	D3D12_RESOURCE_FLAGS flags, void *data = 0, size_t size = 0)
+	D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE htype = D3D12_HEAP_TYPE_DEFAULT)
 {
 	ID3D12Resource *res = NULL;
 	D3D12_RESOURCE_DESC desc = {
@@ -265,26 +272,16 @@ create_res(ID3D12Device *dev, int w, int h, DXGI_FORMAT fmt,
 		D3D12_MEMORY_POOL_UNKNOWN, 1, 1,
 	};
 	desc.MipLevels = 1;
-
-	if (data) {
-		hprop.Type = D3D12_HEAP_TYPE_UPLOAD;
+	hprop.Type = htype;
+	auto state = D3D12_RESOURCE_STATE_COMMON;
+	if (hprop.Type == D3D12_HEAP_TYPE_UPLOAD) {
 		desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
 		desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 		desc.Format = DXGI_FORMAT_UNKNOWN;
 		desc.MipLevels = 1;
+		state = D3D12_RESOURCE_STATE_GENERIC_READ;
 	}
-	auto state = D3D12_RESOURCE_STATE_COMMON;;
 	auto hr = dev->CreateCommittedResource(&hprop, D3D12_HEAP_FLAG_NONE, &desc, state, NULL, IID_PPV_ARGS(&res));
-	if (res && data) {
-		UINT8 *dest = NULL;
-		res->Map(0, NULL, reinterpret_cast<void **>(&dest));
-		if (dest) {
-			memcpy(dest, data, size);
-			res->Unmap(0, NULL);
-		} else {
-			printf("CAN'T MAP w=%d, h=%d, data=%p, size=%zu\n", w, h, data, size);
-		}
-	}
 	return res;
 }
 
@@ -335,6 +332,18 @@ create_uav(ID3D12Device *dev, ID3D12Resource *res,
 	dev->CreateUnorderedAccessView(res, NULL, &desc, hcpu);
 }
 
+int
+create_cbv(ID3D12Device *dev, ID3D12Resource *res,
+           D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cbv)
+{
+	D3D12_RESOURCE_DESC desc_res = res->GetDesc();
+	D3D12_CONSTANT_BUFFER_VIEW_DESC desc_cbv = {};
+
+	desc_cbv.SizeInBytes = desc_res.Width;
+	desc_cbv.BufferLocation = res->GetGPUVirtualAddress();
+	dev->CreateConstantBufferView(&desc_cbv, hcpu_cbv);
+	return (0);
+}
 
 int
 trans_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist,
@@ -416,127 +425,97 @@ create_rootsig(ID3D12Device *dev, UINT slot)
 	}
 
 	hr = dev->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootsig));
-	printf("CreateRootSignature rootsig=%p\n", rootsig);
 	return rootsig;
-}
-
-static D3D12_SHADER_BYTECODE
-create_shader_from_file(
-	std::string fstr, std::string entry, std::string profile,
-	std::vector<uint8_t> &shader_code)
-{
-	ID3DBlob *blob = nullptr;
-	ID3DBlob *blob_err = nullptr;
-	ID3DBlob *blob_sig = nullptr;
-
-	std::vector<WCHAR> wfname;
-	UINT flags = 0;
-	for (int i = 0; i < fstr.length(); i++)
-		wfname.push_back(fstr[i]);
-	wfname.push_back(0);
-	D3DCompileFromFile(&wfname[0], NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE,
-		entry.c_str(), profile.c_str(), flags, 0, &blob, &blob_err);
-	if (blob_err) {
-		printf("%s:\n%s\n", __FUNCTION__, (char *) blob_err->GetBufferPointer());
-		blob_err->Release();
-	}
-	if (!blob && !blob_err)
-		printf("File Not found : %s\n", fstr.c_str());
-	if (!blob)
-		return {nullptr, 0};
-	shader_code.resize(blob->GetBufferSize());
-	memcpy(shader_code.data(), blob->GetBufferPointer(), blob->GetBufferSize());
-	if (blob)
-		blob->Release();
-	return {shader_code.data(), shader_code.size() };
-}
-
-void
-init_device(dx12device *p, HWND hwnd, UINT Width, UINT Height, UINT BufferCount)
-{
-	p->device = create_device();
-	auto dev = p->device;
-	p->queue = create_queue(p->device);
-	p->swap_chain = create_swapchain(p->device, p->queue, hwnd, Width, Height, BufferCount);
-
-	for(int i = 0 ; i < BufferCount; i++) {
-		dx12device::frame f;
-
-		f.uav_cbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-		f.uav_dbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-		f.fence_value = -1;
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0}), IID_PPV_ARGS(&f.rtv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.cbv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.srv_heap));
-		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0}), IID_PPV_ARGS(&f.uav_heap));
-		dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.cmdalloc));
-		dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, f.cmdalloc, NULL, IID_PPV_ARGS(&f.cmdlist));
-		dev->CreateFence(f.fence_value, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&f.fence));
-
-		p->swap_chain->GetBuffer(i, IID_PPV_ARGS(&f.rtv_cbuffer));
-		create_rtv(dev, f.rtv_cbuffer, get_cpu_handle(dev, f.rtv_heap, i));
-		create_uav(dev, f.uav_cbuffer, 0, 0, get_cpu_handle(dev, f.uav_heap, i));
-		//create_uav(dev, f.uav_dbuffer, 0, 0, get_cpu_handle(dev, f.uav_heap, i));
-		p->frames.push_back(f);
-	}
-
-	p->rootsig = create_rootsig(dev, 4);
-
-	D3D12_COMPUTE_PIPELINE_STATE_DESC ccpstate_desc = {};
-	std::vector<uint8_t> cs;
-	ccpstate_desc.pRootSignature = p->rootsig;
-	ccpstate_desc.CS = create_shader_from_file(std::string("test.hlsl"), "CSMain", "cs_5_0", cs);
-	auto status = dev->CreateComputePipelineState(&ccpstate_desc, IID_PPV_ARGS(&p->cpstate));
-
 }
 
 int
 main(int argc, char *argv[])
 {
+	struct frameinfo {
+		ID3D12Resource *uav_cbuffer = 0;
+		ID3D12Resource *uav_dbuffer = 0;
+		ID3D12Resource *cbv_buffer = 0;
+		void *data;
+		dx12context ctx;
+		dx12heap heap_cbv_uav;
+	};
 	enum {
 		Width = 1280,
 		Height = 720,
 		BufferCount = 2,
 	};
 	auto hwnd = init_window(argv[0], Width, Height);
-	dx12device ctx;
-	std::vector<dx12frame> frames;
-	ctx.init(hwnd, Width, Height, BufferCount);
-	
+	dx12device gpudev;
+	std::vector<frameinfo> frames;
+	gpudev.init(hwnd, Width, Height, BufferCount);
+	auto dev = gpudev.dev;
+	for(int i = 0 ; i  < BufferCount; i++) {
+		auto swap_chain = gpudev.swap_chain;
+		frameinfo fi{};
+		fi.ctx.init(dev, swap_chain, i);
+		fi.heap_cbv_uav.init(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+		fi.uav_cbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+		fi.cbv_buffer = create_res(dev, 256, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
+		fi.cbv_buffer->Map(0, NULL, reinterpret_cast<void **>(&fi.data));
+		create_cbv(dev, fi.cbv_buffer, fi.heap_cbv_uav.get_hcpu(dev, fi.cbv_buffer));
+
+		create_uav(dev, fi.uav_cbuffer, 0, 0, fi.heap_cbv_uav.get_hcpu(dev, fi.uav_cbuffer));
+		frames.push_back(fi);
+	}
+	ID3D12RootSignature *rootsig = create_rootsig(gpudev.dev, 4);
+	ID3D12PipelineState *cpstate = NULL;
+	D3D12_COMPUTE_PIPELINE_STATE_DESC ccpstate_desc = {};
+	std::vector<uint8_t> cs;
+	ccpstate_desc.pRootSignature = rootsig;
+	ccpstate_desc.CS = create_shader_from_file(std::string("test.hlsl"), "CSMain", "cs_5_0", cs);
+	auto status = dev->CreateComputePipelineState(&ccpstate_desc, IID_PPV_ARGS(&cpstate));
+
 	for(uint64_t frame = 0 ; update_window() ; frame++) {
 		auto index = frame % BufferCount;
-		auto & f = ctx.frames[index];
-		auto cmdlist = f.cmdlist;
-		auto dev = ctx.device;
-		auto queue = ctx.queue;
-		auto swap_chain = ctx.swap_chain;
+		auto dev = gpudev.dev;
+		auto queue = gpudev.queue;
+		auto swap_chain = gpudev.swap_chain;
 
-		auto value = f.fence->GetCompletedValue();
-		if(value != f.fence_value) {
-			printf("‚µ‚®‚È‚é‚ ‚°‚Ü‚· : %p\n", frame);
-			queue->Signal(f.fence, frame);
+		auto & fi = frames[index];
+		auto & ctx = fi.ctx;
+		auto cmdlist = ctx.cmdlist;
+		struct info {
+			uint32_t width;
+			uint32_t height;
+			uint32_t reserved;
+			uint32_t frame;
+		};
+		info *pinfo = (info *)fi.data;
+		pinfo->width = Width;
+		pinfo->height = Height;
+		pinfo->frame = frame;
+		std::vector<ID3D12DescriptorHeap *> heaps;
+		heaps.push_back(fi.heap_cbv_uav.heap);
+		std::vector<ID3D12CommandList *> vcmdlists;
+		vcmdlists.push_back(cmdlist);
+
+		auto value = ctx.fence->GetCompletedValue();
+		if(value != ctx.fence_value) {
+			printf("sig : %lld\n", value);
 			auto hevent = CreateEventEx(NULL, FALSE, FALSE, EVENT_ALL_ACCESS);
-			f.fence->SetEventOnCompletion(f.fence_value, hevent);
+			ctx.fence->SetEventOnCompletion(ctx.fence_value, hevent);
 			WaitForSingleObject(hevent, INFINITE);
 			CloseHandle(hevent);
 		}
-		printf("ctx.rootsig=%p\n", ctx.rootsig);
-		printf("ctx.cpstate=%p\n", ctx.cpstate);
-		f.cmdalloc->Reset();
-		cmdlist->Reset(f.cmdalloc, 0);
-		cmdlist->SetDescriptorHeaps(1, &f.uav_heap);
-		cmdlist->SetComputeRootSignature(ctx.rootsig);
-		cmdlist->SetComputeRootDescriptorTable(2, get_gpu_handle(dev, f.uav_heap, index));
-		cmdlist->SetComputeRoot32BitConstant(0, 4, frame);
-		cmdlist->SetPipelineState(ctx.cpstate);
-		cmdlist->Dispatch(Width / 8, Height / 8, 1);
-		copy_res_data(dev, cmdlist, f.rtv_cbuffer, f.uav_cbuffer);
-		cmdlist->Close();
 
-		std::vector<ID3D12CommandList *> vcmdlists;
-		vcmdlists.push_back(cmdlist);
+		ctx.fence_value = frame;
+		ctx.cmdalloc->Reset();
+		cmdlist->Reset(ctx.cmdalloc, 0);
+		cmdlist->SetDescriptorHeaps(heaps.size(), heaps.data());
+		cmdlist->SetComputeRootSignature(rootsig);
+		cmdlist->SetComputeRootDescriptorTable(1, fi.heap_cbv_uav.get_hgpu(dev, fi.cbv_buffer));
+		cmdlist->SetComputeRootDescriptorTable(2, fi.heap_cbv_uav.get_hgpu(dev, fi.uav_cbuffer));
+		cmdlist->SetPipelineState(cpstate);
+		cmdlist->Dispatch(Width / 8, Height / 8, 1);
+		copy_res_data(dev, cmdlist, ctx.back_buffer, fi.uav_cbuffer);
+		cmdlist->Close();
 		queue->ExecuteCommandLists(vcmdlists.size(), vcmdlists.data());
-		f.fence_value = frame;
+		queue->Signal(ctx.fence, frame);
 		swap_chain->Present(1, 0);
 	}
 	return 0;

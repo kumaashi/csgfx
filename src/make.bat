@@ -1,1 +1,1 @@
-cl csgfx.cpp /EHsc /Ox /GS- /nologo  
+cl cstgfx.cpp /EHsc /Ox /GS- /nologo  
