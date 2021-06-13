@@ -24,7 +24,7 @@ float4 getcol(float2 vp) {
 	float3 pos = float3(0, 0, time);
 
 	float t = 0.0;
-	for(int i = 0; i < 64; i++) {
+	for(int i = 0; i < 256; i++) {
 		t += map(dir * t + pos);
 	}
 	float3 ip = dir * t + pos;

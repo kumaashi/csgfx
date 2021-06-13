@@ -315,7 +315,7 @@ create_uav(ID3D12Device *dev, ID3D12Resource *res,
 	dev->CreateUnorderedAccessView(res, NULL, &desc, hcpu);
 }
 
-int
+void
 create_cbv(ID3D12Device *dev, ID3D12Resource *res,
 	D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cbv)
 {
@@ -325,10 +325,9 @@ create_cbv(ID3D12Device *dev, ID3D12Resource *res,
 	desc_cbv.SizeInBytes = desc_res.Width;
 	desc_cbv.BufferLocation = res->GetGPUVirtualAddress();
 	dev->CreateConstantBufferView(&desc_cbv, hcpu_cbv);
-	return (0);
 }
 
-int
+void
 trans_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist,
 	int subres_index, ID3D12Resource *res_dest, ID3D12Resource *res_src)
 {
@@ -352,11 +351,9 @@ trans_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist,
 	cmdlist->ResourceBarrier(1, &barrier_start);
 	cmdlist->CopyTextureRegion( &dest, 0, 0, 0, &src, NULL );
 	cmdlist->ResourceBarrier(1, &barrier_end);
-
-	return (0);
 }
 
-int
+void
 copy_res_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist, ID3D12Resource *res_dest, ID3D12Resource *res_src)
 {
 	auto barrier_dest_start = get_res_barrier(res_dest, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -370,7 +367,6 @@ copy_res_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist, ID3D12Resou
 	cmdlist->ResourceBarrier(vstart.size(), vstart.data());
 	cmdlist->CopyResource(res_dest, res_src);
 	cmdlist->ResourceBarrier(vend.size(), vend.data());
-	return (0);
 }
 
 ID3D12RootSignature *
@@ -422,16 +418,28 @@ main(int argc, char *argv[])
 		dx12context ctx;
 		dx12heap heap_cbv_uav;
 	};
+
+	struct info {
+		uint32_t width;
+		uint32_t height;
+		uint32_t reserved;
+		uint32_t frame;
+	};
+
 	enum {
 		Width = 1280,
 		Height = 720,
 		BufferCount = 2,
 	};
 	auto hwnd = init_window(argv[0], Width, Height);
+
 	dx12device gpudev;
 	std::vector<frameinfo> frames;
+
 	gpudev.init(hwnd, Width, Height, BufferCount);
 	auto dev = gpudev.dev;
+	auto queue = gpudev.queue;
+	auto swap_chain = gpudev.swap_chain;
 	for (int i = 0 ; i  < BufferCount; i++) {
 		auto swap_chain = gpudev.swap_chain;
 		frameinfo fi{};
@@ -441,40 +449,33 @@ main(int argc, char *argv[])
 		fi.cbv_buffer = create_res(dev, 256, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
 		fi.cbv_buffer->Map(0, NULL, reinterpret_cast<void **>(&fi.data));
 		create_cbv(dev, fi.cbv_buffer, fi.heap_cbv_uav.get_hcpu(dev, fi.cbv_buffer));
-
 		create_uav(dev, fi.uav_cbuffer, 0, 0, fi.heap_cbv_uav.get_hcpu(dev, fi.uav_cbuffer));
 		frames.push_back(fi);
 	}
 	ID3D12RootSignature *rootsig = create_rootsig(gpudev.dev, 4);
 	ID3D12PipelineState *cpstate = NULL;
-	D3D12_COMPUTE_PIPELINE_STATE_DESC ccpstate_desc = {};
-	std::vector<uint8_t> cs;
-	ccpstate_desc.pRootSignature = rootsig;
-	ccpstate_desc.CS = create_shader_from_file(std::string("test.hlsl"), "CSMain", "cs_5_0", cs);
-	auto status = dev->CreateComputePipelineState(&ccpstate_desc, IID_PPV_ARGS(&cpstate));
+	{
+		D3D12_COMPUTE_PIPELINE_STATE_DESC ccpstate_desc = {};
+		std::vector<uint8_t> cs;
+		ccpstate_desc.pRootSignature = rootsig;
+		ccpstate_desc.CS = create_shader_from_file(std::string("test.hlsl"), "CSMain", "cs_5_0", cs);
+		auto status = dev->CreateComputePipelineState(&ccpstate_desc, IID_PPV_ARGS(&cpstate));
+	}
 
 	for (uint64_t frame = 0 ; update_window() ; frame++) {
-		auto index = frame % BufferCount;
-		auto dev = gpudev.dev;
-		auto queue = gpudev.queue;
-		auto swap_chain = gpudev.swap_chain;
+		std::vector<ID3D12DescriptorHeap *> vheaps;
+		std::vector<ID3D12CommandList *> vcmdlists;
 
+		auto index = frame % BufferCount;
 		auto & fi = frames[index];
 		auto & ctx = fi.ctx;
 		auto cmdlist = ctx.cmdlist;
-		struct info {
-			uint32_t width;
-			uint32_t height;
-			uint32_t reserved;
-			uint32_t frame;
-		};
 		info *pinfo = (info *)fi.data;
 		pinfo->width = Width;
 		pinfo->height = Height;
 		pinfo->frame = frame;
-		std::vector<ID3D12DescriptorHeap *> heaps;
-		heaps.push_back(fi.heap_cbv_uav.heap);
-		std::vector<ID3D12CommandList *> vcmdlists;
+
+		vheaps.push_back(fi.heap_cbv_uav.heap);
 		vcmdlists.push_back(cmdlist);
 
 		auto value = ctx.fence->GetCompletedValue();
@@ -489,7 +490,7 @@ main(int argc, char *argv[])
 		ctx.fence_value = frame;
 		ctx.cmdalloc->Reset();
 		cmdlist->Reset(ctx.cmdalloc, 0);
-		cmdlist->SetDescriptorHeaps(heaps.size(), heaps.data());
+		cmdlist->SetDescriptorHeaps(vheaps.size(), vheaps.data());
 		cmdlist->SetComputeRootSignature(rootsig);
 		cmdlist->SetComputeRootDescriptorTable(1, fi.heap_cbv_uav.get_hgpu(dev, fi.cbv_buffer));
 		cmdlist->SetComputeRootDescriptorTable(2, fi.heap_cbv_uav.get_hgpu(dev, fi.uav_cbuffer));
