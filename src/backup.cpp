@@ -68,10 +68,10 @@ init_window(const char *name, int w, int h)
 	rc.right -= rc.left;
 	rc.bottom -= rc.top;
 	auto hwnd = CreateWindowEx(
-		ex_style, name, name, style,
-		(GetSystemMetrics(SM_CXSCREEN) - rc.right) / 2,
-		(GetSystemMetrics(SM_CYSCREEN) - rc.bottom) / 2,
-		rc.right, rc.bottom, NULL, NULL, instance, NULL);
+			ex_style, name, name, style,
+			(GetSystemMetrics(SM_CXSCREEN) - rc.right) / 2,
+			(GetSystemMetrics(SM_CYSCREEN) - rc.bottom) / 2,
+			rc.right, rc.bottom, NULL, NULL, instance, NULL);
 	ShowWindow(hwnd, SW_SHOW);
 	SetFocus(hwnd);
 	return (hwnd);
@@ -117,17 +117,18 @@ struct dx12device {
 	ID3D12RootSignature *rootsig = NULL;
 	ID3D12PipelineState *pstate = NULL;
 	std::vector<frame> frames;
-	void print() {
+	void print()
+	{
 		printf("DEBUG : device=%p\n", device);
 		printf("DEBUG : queue=%p\n", queue);
 		printf("DEBUG : swap_chain=%p\n", swap_chain);
-		for(auto i = 0; i < frames.size(); i++) {
+		for (auto i = 0; i < frames.size(); i++) {
 			auto & f = frames[i];
 			printf("FRAME : %d -------------------------------\n", i);
 			printf("DEBUG : cmdalloc=%p\n", f.cmdalloc);
 			printf("DEBUG : cmdlist=%p\n", f.cmdlist);
 			printf("DEBUG : fence=%p\n", f.fence);
-			
+
 			printf("DEBUG : backbuffer=%p\n", f.backbuffer);
 			printf("DEBUG : uavbuffer=%p\n", f.uavbuffer);
 			printf("DEBUG : rtv_heap=%p\n", f.rtv_heap);
@@ -260,7 +261,7 @@ create_uav(ID3D12Device *dev, ID3D12Resource *res,
 	D3D12_RESOURCE_DESC desc_res = res->GetDesc();
 
 	desc.Format = desc_res.Format;
-	if(byte_stride == 0) {
+	if (byte_stride == 0) {
 		desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
 		desc.Texture2D.MipSlice = 0;
 		desc.Texture2D.PlaneSlice = 0;
@@ -311,7 +312,7 @@ int copy_res_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist, ID3D12R
 
 	std::vector<D3D12_RESOURCE_BARRIER> vstart = { barrier_dest_start, barrier_src_start, };
 	std::vector<D3D12_RESOURCE_BARRIER> vend = { barrier_dest_end, barrier_src_end, };
-	
+
 	cmdlist->ResourceBarrier(vstart.size(), vstart.data());
 	cmdlist->CopyResource(res_dest, res_src);
 	cmdlist->ResourceBarrier(vend.size(), vend.data());
@@ -401,7 +402,7 @@ init_device(dx12device *p, HWND hwnd, UINT Width, UINT Height, UINT BufferCount)
 	p->queue = create_queue(p->device);
 	p->swap_chain = create_swapchain(p->device, p->queue, hwnd, Width, Height, BufferCount);
 
-	for(int i = 0 ; i < BufferCount; i++) {
+	for (int i = 0 ; i < BufferCount; i++) {
 		dx12device::frame f;
 
 		f.uavbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
@@ -472,8 +473,8 @@ main(int argc, char *argv[])
 	dx12device ctx;
 	init_device(&ctx, hwnd, Width, Height, BufferCount);
 	ctx.print();
-	
-	for(uint64_t frame = 0 ; update_window() ; frame++) {
+
+	for (uint64_t frame = 0 ; update_window() ; frame++) {
 		auto index = frame % BufferCount;
 		auto & f = ctx.frames[index];
 		auto cmdlist = f.cmdlist;
@@ -482,7 +483,7 @@ main(int argc, char *argv[])
 		auto swap_chain = ctx.swap_chain;
 		auto value = f.fence->GetCompletedValue();
 
-		if(value != f.fence_value) {
+		if (value != f.fence_value) {
 			printf("‚µ‚®‚È‚é‚ ‚°‚Ü‚· : %p\n", frame);
 			queue->Signal(f.fence, frame);
 			auto hevent = CreateEventEx(NULL, FALSE, FALSE, EVENT_ALL_ACCESS);
@@ -509,7 +510,7 @@ main(int argc, char *argv[])
 		cmdlist->OMSetRenderTargets(rtv_handles.size(), rtv_handles.data(), FALSE, nullptr);
 		cmdlist->RSSetViewports(1, &viewport);
 		cmdlist->RSSetScissorRects(1, &rect);
-		for(auto hcpu : rtv_handles) {
+		for (auto hcpu : rtv_handles) {
 			float clear_color[2][4] = {
 				{1, 0, 0, 1},
 				{0, 0, 1, 1},
@@ -525,7 +526,7 @@ main(int argc, char *argv[])
 		std::vector<ID3D12CommandList *> vcmdlists;
 		vcmdlists.push_back(cmdlist);
 		queue->ExecuteCommandLists(vcmdlists.size(), vcmdlists.data());
-			queue->Signal(f.fence, frame);
+		queue->Signal(f.fence, frame);
 		f.fence_value = frame;
 		swap_chain->Present(1, 0);
 	}

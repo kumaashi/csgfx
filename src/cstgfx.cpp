@@ -67,10 +67,10 @@ init_window(const char *name, int w, int h)
 	rc.right -= rc.left;
 	rc.bottom -= rc.top;
 	auto hwnd = CreateWindowEx(
-		ex_style, name, name, style,
-		(GetSystemMetrics(SM_CXSCREEN) - rc.right) / 2,
-		(GetSystemMetrics(SM_CYSCREEN) - rc.bottom) / 2,
-		rc.right, rc.bottom, NULL, NULL, instance, NULL);
+			ex_style, name, name, style,
+			(GetSystemMetrics(SM_CXSCREEN) - rc.right) / 2,
+			(GetSystemMetrics(SM_CYSCREEN) - rc.bottom) / 2,
+			rc.right, rc.bottom, NULL, NULL, instance, NULL);
 	ShowWindow(hwnd, SW_SHOW);
 	SetFocus(hwnd);
 	return (hwnd);
@@ -135,7 +135,7 @@ struct dx12heap {
 	void init(ID3D12Device *dev, D3D12_DESCRIPTOR_HEAP_TYPE type, UINT num = 256)
 	{
 		auto flag = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-		if(type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+		if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
 			flag = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		dev->CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC({type, num, flag, 0}), IID_PPV_ARGS(&heap));
 	}
@@ -156,7 +156,7 @@ struct dx12heap {
 	D3D12_CPU_DESCRIPTOR_HANDLE
 	get_hcpu(ID3D12Device *dev, void *res)
 	{
-		if(mhcpu.count(res) == 0)
+		if (mhcpu.count(res) == 0)
 			alloc(dev, res);
 		return mhcpu[res];
 	}
@@ -164,7 +164,7 @@ struct dx12heap {
 	D3D12_GPU_DESCRIPTOR_HANDLE
 	get_hgpu(ID3D12Device *dev, void *res)
 	{
-		if(mhgpu.count(res) == 0)
+		if (mhgpu.count(res) == 0)
 			alloc(dev, res);
 		return mhgpu[res];
 	}
@@ -214,14 +214,15 @@ struct dx12context {
 	ID3D12Resource *back_buffer = NULL;
 	ID3D12Fence *fence = NULL;
 	uint64_t fence_value = -1;
-	void init(ID3D12Device *dev, IDXGISwapChain3 *swap_chain, UINT buffer_index) {
+	void init(ID3D12Device *dev, IDXGISwapChain3 *swap_chain, UINT buffer_index)
+	{
 		fence_value = -1;
 		dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdalloc));
 		dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdalloc, NULL, IID_PPV_ARGS(&cmdlist));
 		dev->CreateFence(fence_value, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
 		swap_chain->GetBuffer(buffer_index, IID_PPV_ARGS(&back_buffer));
 	}
-	
+
 };
 
 D3D12_RESOURCE_BARRIER
@@ -300,7 +301,7 @@ create_uav(ID3D12Device *dev, ID3D12Resource *res,
 	D3D12_RESOURCE_DESC desc_res = res->GetDesc();
 
 	desc.Format = desc_res.Format;
-	if(byte_stride == 0) {
+	if (byte_stride == 0) {
 		desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
 		desc.Texture2D.MipSlice = 0;
 		desc.Texture2D.PlaneSlice = 0;
@@ -316,7 +317,7 @@ create_uav(ID3D12Device *dev, ID3D12Resource *res,
 
 int
 create_cbv(ID3D12Device *dev, ID3D12Resource *res,
-           D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cbv)
+	D3D12_CPU_DESCRIPTOR_HANDLE hcpu_cbv)
 {
 	D3D12_RESOURCE_DESC desc_res = res->GetDesc();
 	D3D12_CONSTANT_BUFFER_VIEW_DESC desc_cbv = {};
@@ -365,7 +366,7 @@ copy_res_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist, ID3D12Resou
 
 	std::vector<D3D12_RESOURCE_BARRIER> vstart = { barrier_dest_start, barrier_src_start, };
 	std::vector<D3D12_RESOURCE_BARRIER> vend = { barrier_dest_end, barrier_src_end, };
-	
+
 	cmdlist->ResourceBarrier(vstart.size(), vstart.data());
 	cmdlist->CopyResource(res_dest, res_src);
 	cmdlist->ResourceBarrier(vend.size(), vend.data());
@@ -431,7 +432,7 @@ main(int argc, char *argv[])
 	std::vector<frameinfo> frames;
 	gpudev.init(hwnd, Width, Height, BufferCount);
 	auto dev = gpudev.dev;
-	for(int i = 0 ; i  < BufferCount; i++) {
+	for (int i = 0 ; i  < BufferCount; i++) {
 		auto swap_chain = gpudev.swap_chain;
 		frameinfo fi{};
 		fi.ctx.init(dev, swap_chain, i);
@@ -452,7 +453,7 @@ main(int argc, char *argv[])
 	ccpstate_desc.CS = create_shader_from_file(std::string("test.hlsl"), "CSMain", "cs_5_0", cs);
 	auto status = dev->CreateComputePipelineState(&ccpstate_desc, IID_PPV_ARGS(&cpstate));
 
-	for(uint64_t frame = 0 ; update_window() ; frame++) {
+	for (uint64_t frame = 0 ; update_window() ; frame++) {
 		auto index = frame % BufferCount;
 		auto dev = gpudev.dev;
 		auto queue = gpudev.queue;
@@ -477,7 +478,7 @@ main(int argc, char *argv[])
 		vcmdlists.push_back(cmdlist);
 
 		auto value = ctx.fence->GetCompletedValue();
-		if(value != ctx.fence_value) {
+		if (value != ctx.fence_value) {
 			printf("sig : %lld\n", value);
 			auto hevent = CreateEventEx(NULL, FALSE, FALSE, EVENT_ALL_ACCESS);
 			ctx.fence->SetEventOnCompletion(ctx.fence_value, hevent);
