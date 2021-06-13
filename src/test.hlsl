@@ -3,7 +3,11 @@ RWTexture2D<float4> tex0 : register(u0);
 RWTexture2D<float4> tex1 : register(u1);
 
 float map(float3 p) {
-	return length(abs(p % 1) - 0.5) - 0.15;
+	float time = info.w / 60.0;
+	//return length(abs(p % 1) - 0.5) - 0.15;
+	p.x += sin(p.z * 0.3) * 0.5;
+	p.y += cos(p.z * 0.3) * 0.75;
+	return 1.0 - length(p.xy);
 }
 
 
@@ -24,14 +28,14 @@ float4 getcol(float2 vp) {
 	float3 pos = float3(0, 0, time);
 
 	float t = 0.0;
-	for(int i = 0; i < 256; i++) {
+	for(int i = 0; i < 64; i++) {
 		t += map(dir * t + pos);
 	}
 	float3 ip = dir * t + pos;
 	float3 N = getnor(ip);
 	float3 L = normalize(float3(1,2,3));
 	float D = max(0.01, dot(N, L));
-	return float4(N, 1) * D + t * 0.05;
+	return float4(abs(N), 1) * D + t * 0.25;
 }
 
 [numthreads(8, 8, 1)]

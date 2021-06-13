@@ -12,6 +12,8 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 
+#include <DirectXMath.h>
+
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -180,9 +182,7 @@ struct dx12device {
 	{
 		D3D12_COMMAND_QUEUE_DESC desc = {};
 		D3D12CreateDevice(NULL, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&dev));
-		printf("dev=%p\n", dev);
 		dev->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue));
-		printf("queue=%p\n", queue);
 		{
 			IDXGIFactory4 *factory = NULL;
 			IDXGISwapChain *temp = NULL;
@@ -211,7 +211,7 @@ struct dx12device {
 struct dx12context {
 	ID3D12CommandAllocator *cmdalloc = NULL;
 	ID3D12GraphicsCommandList *cmdlist = NULL;
-	ID3D12Resource *back_buffer = NULL;
+	ID3D12Resource *buffer_back_color = NULL;
 	ID3D12Fence *fence = NULL;
 	uint64_t fence_value = -1;
 	void init(ID3D12Device *dev, IDXGISwapChain3 *swap_chain, UINT buffer_index)
@@ -220,7 +220,7 @@ struct dx12context {
 		dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&cmdalloc));
 		dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, cmdalloc, NULL, IID_PPV_ARGS(&cmdlist));
 		dev->CreateFence(fence_value, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-		swap_chain->GetBuffer(buffer_index, IID_PPV_ARGS(&back_buffer));
+		swap_chain->GetBuffer(buffer_index, IID_PPV_ARGS(&buffer_back_color));
 	}
 
 };
@@ -263,20 +263,10 @@ create_res(ID3D12Device *dev, int w, int h, DXGI_FORMAT fmt,
 		desc.Format = DXGI_FORMAT_UNKNOWN;
 		desc.MipLevels = 1;
 		state = D3D12_RESOURCE_STATE_GENERIC_READ;
+		desc.Width = (desc.Width + 255) & ~255;
 	}
 	auto hr = dev->CreateCommittedResource(&hprop, D3D12_HEAP_FLAG_NONE, &desc, state, NULL, IID_PPV_ARGS(&res));
 	return res;
-}
-
-void
-create_rtv(ID3D12Device *dev, ID3D12Resource *res,
-	D3D12_CPU_DESCRIPTOR_HANDLE hcpu)
-{
-	D3D12_RENDER_TARGET_VIEW_DESC desc = {};
-	D3D12_RESOURCE_DESC desc_res = res->GetDesc();
-	desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-	desc.Format = desc_res.Format;
-	dev->CreateRenderTargetView(res, &desc, hcpu);
 }
 
 void
@@ -407,14 +397,62 @@ create_rootsig(ID3D12Device *dev, UINT slot)
 	return rootsig;
 }
 
+struct matrix {
+	float data[4][4];
+
+	matrix trans(float x, float y, float z) {
+		using namespace DirectX;
+		auto data = XMMatrixTranslation(x, y, z);
+		return *this = *(matrix *)&data;
+	}
+
+	matrix view(float px, float py, float pz,
+		float ax, float ay, float az,
+		float ux, float uy, float uz)
+	{
+		using namespace DirectX;
+		auto vpos = XMVectorSet(px, py, pz, 1.0);
+		auto vat = XMVectorSet(ax, ay, az, 1.0);
+		auto vup = XMVectorSet(ux, uy, uz, 1.0);
+		auto data = XMMatrixLookAtLH(vpos, vat, vup);
+		return *this = *(matrix *)&data;
+	}
+
+	matrix proj(float FovAngleY, float AspectRatio, float NearZ, float FarZ) {
+		using namespace DirectX;
+		auto data = XMMatrixPerspectiveFovLH(FovAngleY, AspectRatio, NearZ, FarZ);
+		return *this = *(matrix *)&data;
+	}
+};
+
+float cube_vertex[] = {
+	1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 
+	1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0, 
+	1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 
+	1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
+	1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 
+	1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 
+	1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 
+	1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 
+	-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 
+	-1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, 
+	1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 
+	1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 
+};
+
 int
 main(int argc, char *argv[])
 {
-	struct frameinfo {
-		ID3D12Resource *uav_cbuffer = 0;
+	struct frame_info {
+		ID3D12Resource *buffer_vertex = 0;
+		ID3D12Resource *buffer_vertex_sc = 0;
+		ID3D12Resource *buffer_info = 0;
+		void *ptr_buffer_vertex;
+		void *ptr_buffer_vertex_sc;
+		void *ptr_buffer_info;
+
+		ID3D12Resource *buffer_color = 0;
 		ID3D12Resource *uav_dbuffer = 0;
-		ID3D12Resource *cbv_buffer = 0;
-		void *data;
 		dx12context ctx;
 		dx12heap heap_cbv_uav;
 	};
@@ -424,6 +462,19 @@ main(int argc, char *argv[])
 		uint32_t height;
 		uint32_t reserved;
 		uint32_t frame;
+		matrix proj;
+		matrix view;
+		matrix world;
+	};
+
+	struct vertex_fmt {
+		float pos[3];
+		float color[4];
+	};
+
+	struct vertex_fmt_sc {
+		float pos[4];
+		float color[4];
 	};
 
 	enum {
@@ -431,10 +482,11 @@ main(int argc, char *argv[])
 		Height = 720,
 		BufferCount = 2,
 	};
+	
 	auto hwnd = init_window(argv[0], Width, Height);
 
 	dx12device gpudev;
-	std::vector<frameinfo> frames;
+	std::vector<frame_info> frames;
 
 	gpudev.init(hwnd, Width, Height, BufferCount);
 	auto dev = gpudev.dev;
@@ -442,14 +494,21 @@ main(int argc, char *argv[])
 	auto swap_chain = gpudev.swap_chain;
 	for (int i = 0 ; i  < BufferCount; i++) {
 		auto swap_chain = gpudev.swap_chain;
-		frameinfo fi{};
+		frame_info fi{};
 		fi.ctx.init(dev, swap_chain, i);
 		fi.heap_cbv_uav.init(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-		fi.uav_cbuffer = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-		fi.cbv_buffer = create_res(dev, 256, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
-		fi.cbv_buffer->Map(0, NULL, reinterpret_cast<void **>(&fi.data));
-		create_cbv(dev, fi.cbv_buffer, fi.heap_cbv_uav.get_hcpu(dev, fi.cbv_buffer));
-		create_uav(dev, fi.uav_cbuffer, 0, 0, fi.heap_cbv_uav.get_hcpu(dev, fi.uav_cbuffer));
+		fi.buffer_color = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+		fi.buffer_info = create_res(dev, 256, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
+		fi.buffer_vertex = create_res(dev, sizeof(vertex_fmt) * 2048, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
+		fi.buffer_vertex_sc = create_res(dev, sizeof(vertex_fmt) * 2048, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
+
+		fi.buffer_info->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_info));
+		fi.buffer_vertex->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_vertex));
+		fi.buffer_vertex_sc->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_vertex_sc));
+
+		create_cbv(dev, fi.buffer_info, fi.heap_cbv_uav.get_hcpu(dev, fi.buffer_info));
+		create_uav(dev, fi.buffer_color, 0, 0, fi.heap_cbv_uav.get_hcpu(dev, fi.buffer_color));
 		frames.push_back(fi);
 	}
 	ID3D12RootSignature *rootsig = create_rootsig(gpudev.dev, 4);
@@ -470,7 +529,7 @@ main(int argc, char *argv[])
 		auto & fi = frames[index];
 		auto & ctx = fi.ctx;
 		auto cmdlist = ctx.cmdlist;
-		info *pinfo = (info *)fi.data;
+		info *pinfo = (info *)fi.ptr_buffer_info;
 		pinfo->width = Width;
 		pinfo->height = Height;
 		pinfo->frame = frame;
@@ -492,11 +551,11 @@ main(int argc, char *argv[])
 		cmdlist->Reset(ctx.cmdalloc, 0);
 		cmdlist->SetDescriptorHeaps(vheaps.size(), vheaps.data());
 		cmdlist->SetComputeRootSignature(rootsig);
-		cmdlist->SetComputeRootDescriptorTable(1, fi.heap_cbv_uav.get_hgpu(dev, fi.cbv_buffer));
-		cmdlist->SetComputeRootDescriptorTable(2, fi.heap_cbv_uav.get_hgpu(dev, fi.uav_cbuffer));
+		cmdlist->SetComputeRootDescriptorTable(1, fi.heap_cbv_uav.get_hgpu(dev, fi.buffer_info));
+		cmdlist->SetComputeRootDescriptorTable(2, fi.heap_cbv_uav.get_hgpu(dev, fi.buffer_color));
 		cmdlist->SetPipelineState(cpstate);
 		cmdlist->Dispatch(Width / 8, Height / 8, 1);
-		copy_res_data(dev, cmdlist, ctx.back_buffer, fi.uav_cbuffer);
+		copy_res_data(dev, cmdlist, ctx.buffer_back_color, fi.buffer_color);
 		cmdlist->Close();
 		queue->ExecuteCommandLists(vcmdlists.size(), vcmdlists.data());
 		queue->Signal(ctx.fence, frame);
