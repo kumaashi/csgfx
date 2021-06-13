@@ -175,24 +175,6 @@ struct dx12device {
 	ID3D12CommandQueue *queue = NULL;
 	IDXGISwapChain3 *swap_chain = NULL;
 
-	UINT get_width() {
-		DXGI_SWAP_CHAIN_DESC desc = {};
-		swap_chain->GetDesc(&desc);
-		return desc.BufferDesc.Width;
-	}
-
-	UINT get_height() {
-		DXGI_SWAP_CHAIN_DESC desc = {};
-		swap_chain->GetDesc(&desc);
-		return desc.BufferDesc.Height;
-	}
-
-	UINT get_buffer_count() {
-		DXGI_SWAP_CHAIN_DESC desc = {};
-		swap_chain->GetDesc(&desc);
-		return desc.BufferCount;
-	}
-
 	void
 	init(HWND hwnd, UINT Width, UINT Height, UINT BufferCount)
 	{
