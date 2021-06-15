@@ -5,6 +5,9 @@ RWTexture2D<float4> tex1 : register(u1);
 float map(float3 p) {
 	float time = info.w / 60.0;
 	float t = length(abs(p % 1) - 0.5) - 0.15;
+	t = min(t, length(abs(p.xy % 1) - 0.5) - 0.02);
+	t = min(t, length(abs(p.yz % 1) - 0.5) - 0.02);
+	t = min(t, length(abs(p.zx % 1) - 0.5) - 0.02);
 	return t;
 }
 
@@ -32,7 +35,7 @@ float4 getcol(float2 vp) {
 	float3 dir = normalize(float3(uv, 1.0));
 	dir.xz = rot(dir.xz, floor(tm * 0.50) + smoothstep(0.25, 0.75, frac(tm * 0.50)));
 	dir.zy = rot(dir.zy, floor(tm * 0.25) + smoothstep(0.25, 0.75, frac(tm * 0.25)));
-	float3 pos = float3(0, 0, time);
+	float3 pos = float3(time * 0.25, 0, time);
 
 	float t = 0.0;
 	for(int i = 0; i < 100; i++) {
