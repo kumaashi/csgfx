@@ -12,8 +12,6 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 
-#include <DirectXMath.h>
-
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -49,7 +47,6 @@ msg_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	}
 	return DefWindowProc(hWnd, msg, wParam, lParam);
 }
-
 
 static HWND
 init_window(const char *name, int w, int h)
@@ -126,7 +123,6 @@ create_shader_from_file(
 		blob->Release();
 	return { shader_code.data(), shader_code.size() };
 }
-
 
 struct dx12heap {
 	ID3D12DescriptorHeap *heap = NULL;
@@ -227,7 +223,8 @@ struct dx12context {
 
 D3D12_RESOURCE_BARRIER
 get_res_barrier(ID3D12Resource *res,
-	D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after,
+	D3D12_RESOURCE_STATES before,
+	D3D12_RESOURCE_STATES after,
 	D3D12_RESOURCE_BARRIER_TYPE type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
 {
 	D3D12_RESOURCE_BARRIER ret = {};
@@ -241,8 +238,10 @@ get_res_barrier(ID3D12Resource *res,
 }
 
 ID3D12Resource *
-create_res(ID3D12Device *dev, int w, int h, DXGI_FORMAT fmt,
-	D3D12_RESOURCE_FLAGS flags, D3D12_HEAP_TYPE htype = D3D12_HEAP_TYPE_DEFAULT)
+create_res(ID3D12Device *dev, int w, int h,
+	DXGI_FORMAT fmt,
+	D3D12_RESOURCE_FLAGS flags,
+	D3D12_HEAP_TYPE htype = D3D12_HEAP_TYPE_DEFAULT)
 {
 	ID3D12Resource *res = NULL;
 	D3D12_RESOURCE_DESC desc = {
@@ -318,33 +317,10 @@ create_cbv(ID3D12Device *dev, ID3D12Resource *res,
 }
 
 void
-trans_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist,
-	int subres_index, ID3D12Resource *res_dest, ID3D12Resource *res_src)
-{
-	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-	D3D12_TEXTURE_COPY_LOCATION dest = {};
-	D3D12_TEXTURE_COPY_LOCATION src = {};
-	D3D12_RESOURCE_BARRIER barrier = {};
-	D3D12_RESOURCE_DESC desc = res_dest->GetDesc();
-	UINT64 total_bytes = 0;
-	auto barrier_start = get_res_barrier(res_dest, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
-	auto barrier_end = get_res_barrier(res_dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
-
-	dev->GetCopyableFootprints(&desc, subres_index, 1, 0, &footprint, NULL, NULL, &total_bytes);
-	dest.pResource = res_dest;
-	dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-	dest.SubresourceIndex = subres_index;
-	src.pResource = res_src;
-	src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-	src.PlacedFootprint = footprint;
-
-	cmdlist->ResourceBarrier(1, &barrier_start);
-	cmdlist->CopyTextureRegion( &dest, 0, 0, 0, &src, NULL );
-	cmdlist->ResourceBarrier(1, &barrier_end);
-}
-
-void
-copy_res_data(ID3D12Device *dev, ID3D12GraphicsCommandList *cmdlist, ID3D12Resource *res_dest, ID3D12Resource *res_src)
+copy_res_data(ID3D12Device *dev,
+	ID3D12GraphicsCommandList *cmdlist,
+	ID3D12Resource *res_dest,
+	ID3D12Resource *res_src)
 {
 	auto barrier_dest_start = get_res_barrier(res_dest, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
 	auto barrier_dest_end = get_res_barrier(res_dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
@@ -397,64 +373,21 @@ create_rootsig(ID3D12Device *dev, UINT slot)
 	return rootsig;
 }
 
-struct matrix {
-	float data[4][4];
-
-	matrix trans(float x, float y, float z) {
-		using namespace DirectX;
-		auto data = XMMatrixTranslation(x, y, z);
-		return *this = *(matrix *)&data;
-	}
-
-	matrix view(float px, float py, float pz,
-		float ax, float ay, float az,
-		float ux, float uy, float uz)
-	{
-		using namespace DirectX;
-		auto vpos = XMVectorSet(px, py, pz, 1.0);
-		auto vat = XMVectorSet(ax, ay, az, 1.0);
-		auto vup = XMVectorSet(ux, uy, uz, 1.0);
-		auto data = XMMatrixLookAtLH(vpos, vat, vup);
-		return *this = *(matrix *)&data;
-	}
-
-	matrix proj(float FovAngleY, float AspectRatio, float NearZ, float FarZ) {
-		using namespace DirectX;
-		auto data = XMMatrixPerspectiveFovLH(FovAngleY, AspectRatio, NearZ, FarZ);
-		return *this = *(matrix *)&data;
-	}
-};
-
-float cube_vertex[] = {
-	1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 
-	1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0, 
-	1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 
-	1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
-	1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 
-	1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 
-	1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 
-	1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 
-	-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 
-	-1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, 
-	1.0, 1.0, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 
-	1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 
-};
-
 int
 main(int argc, char *argv[])
 {
-	struct frame_info {
-		ID3D12Resource *buffer_vertex = 0;
-		ID3D12Resource *buffer_vertex_sc = 0;
-		ID3D12Resource *buffer_info = 0;
-		void *ptr_buffer_vertex;
-		void *ptr_buffer_vertex_sc;
-		void *ptr_buffer_info;
+	enum {
+		Width = 1280,
+		Height = 720,
+		BufferCount = 2,
+	};
 
-		ID3D12Resource *buffer_color = 0;
-		ID3D12Resource *uav_dbuffer = 0;
+	struct frame_info {
 		dx12context ctx;
 		dx12heap heap_cbv_uav;
+		ID3D12Resource *buffer_info = 0;
+		ID3D12Resource *buffer_color = 0;
+		void *ptr_buffer_info;
 	};
 
 	struct info {
@@ -462,32 +395,12 @@ main(int argc, char *argv[])
 		uint32_t height;
 		uint32_t reserved;
 		uint32_t frame;
-		matrix proj;
-		matrix view;
-		matrix world;
 	};
-
-	struct vertex_fmt {
-		float pos[3];
-		float color[4];
-	};
-
-	struct vertex_fmt_sc {
-		float pos[4];
-		float color[4];
-	};
-
-	enum {
-		Width = 1280,
-		Height = 720,
-		BufferCount = 2,
-	};
-	
-	auto hwnd = init_window(argv[0], Width, Height);
 
 	dx12device gpudev;
 	std::vector<frame_info> frames;
 
+	auto hwnd = init_window(argv[0], Width, Height);
 	gpudev.init(hwnd, Width, Height, BufferCount);
 	auto dev = gpudev.dev;
 	auto queue = gpudev.queue;
@@ -498,14 +411,8 @@ main(int argc, char *argv[])
 		fi.ctx.init(dev, swap_chain, i);
 		fi.heap_cbv_uav.init(dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		fi.buffer_color = create_res(dev, Width, Height, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-
 		fi.buffer_info = create_res(dev, 256, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
-		fi.buffer_vertex = create_res(dev, sizeof(vertex_fmt) * 2048, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
-		fi.buffer_vertex_sc = create_res(dev, sizeof(vertex_fmt) * 2048, 1, DXGI_FORMAT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE, D3D12_HEAP_TYPE_UPLOAD);
-
 		fi.buffer_info->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_info));
-		fi.buffer_vertex->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_vertex));
-		fi.buffer_vertex_sc->Map(0, NULL, reinterpret_cast<void **>(&fi.ptr_buffer_vertex_sc));
 
 		create_cbv(dev, fi.buffer_info, fi.heap_cbv_uav.get_hcpu(dev, fi.buffer_info));
 		create_uav(dev, fi.buffer_color, 0, 0, fi.heap_cbv_uav.get_hcpu(dev, fi.buffer_color));
@@ -538,8 +445,8 @@ main(int argc, char *argv[])
 		vcmdlists.push_back(cmdlist);
 
 		auto value = ctx.fence->GetCompletedValue();
+		queue->Signal(ctx.fence, frame);
 		if (value != ctx.fence_value) {
-			printf("sig : %lld\n", value);
 			auto hevent = CreateEventEx(NULL, FALSE, FALSE, EVENT_ALL_ACCESS);
 			ctx.fence->SetEventOnCompletion(ctx.fence_value, hevent);
 			WaitForSingleObject(hevent, INFINITE);
@@ -558,7 +465,6 @@ main(int argc, char *argv[])
 		copy_res_data(dev, cmdlist, ctx.buffer_back_color, fi.buffer_color);
 		cmdlist->Close();
 		queue->ExecuteCommandLists(vcmdlists.size(), vcmdlists.data());
-		queue->Signal(ctx.fence, frame);
 		swap_chain->Present(1, 0);
 	}
 	return 0;

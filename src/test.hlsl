@@ -4,10 +4,8 @@ RWTexture2D<float4> tex1 : register(u1);
 
 float map(float3 p) {
 	float time = info.w / 60.0;
-	//return length(abs(p % 1) - 0.5) - 0.15;
-	p.x += sin(p.z * 0.3) * 0.5;
-	p.y += cos(p.z * 0.3) * 0.75;
-	return 1.0 - length(p.xy);
+	float t = length(abs(p % 1) - 0.5) - 0.15;
+	return t;
 }
 
 
@@ -21,21 +19,30 @@ float3 getnor(float3 p) {
 }
 
 
+float2 rot(float2 p, float a) {
+	return float2(
+		p.x * cos(a) - p.y * sin(a),
+		p.x * sin(a) + p.y * cos(a));
+}
+
 float4 getcol(float2 vp) {
 	float time = info.w / 60.0;
+	float tm = time * 0.25;
 	float2 uv = (2.0 * vp - info.xy) / min(info.x, info.y);
 	float3 dir = normalize(float3(uv, 1.0));
+	dir.xz = rot(dir.xz, floor(tm * 0.50) + smoothstep(0.25, 0.75, frac(tm * 0.50)));
+	dir.zy = rot(dir.zy, floor(tm * 0.25) + smoothstep(0.25, 0.75, frac(tm * 0.25)));
 	float3 pos = float3(0, 0, time);
 
 	float t = 0.0;
-	for(int i = 0; i < 64; i++) {
+	for(int i = 0; i < 100; i++) {
 		t += map(dir * t + pos);
 	}
 	float3 ip = dir * t + pos;
 	float3 N = getnor(ip);
 	float3 L = normalize(float3(1,2,3));
 	float D = max(0.01, dot(N, L));
-	return float4(abs(N), 1) * D + t * 0.25;
+	return float4(abs(N), 1) * D + t * 0.05;
 }
 
 [numthreads(8, 8, 1)]
